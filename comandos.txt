@@ -1,0 +1,138 @@
+=======================================================
+                    COMANDOS YT-DLP PROFISSIONAIS
+=======================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. DOWNLOAD DE ÁUDIO (OPUS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── VERSÃO COMPLETA ──
+
+yt-dlp -f bestaudio --extract-audio --audio-format opus --audio-quality 0 --cookies cookies.txt --embed-thumbnail --embed-metadata --add-metadata --parse-metadata "title:%(title)s" --parse-metadata "uploader:%(artist)s" -o "%(artist)s - %(title)s.%(ext)s" --batch-file lista.txt
+
+── VERSÃO SIMPLIFICADA ──
+
+yt-dlp -x --audio-format opus --cookies cookies.txt -a lista.txt
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. DOWNLOAD DE VÍDEO (MP4)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── VERSÃO COMPLETA (MELHOR QUALIDADE) ──
+
+yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 --cookies cookies.txt --embed-thumbnail --embed-metadata --embed-subs --sub-langs "pt,pt-BR,en" --convert-subs srt --embed-chapters -o "%(uploader)s - %(title)s.%(ext)s" --batch-file lista.txt
+
+── VERSÃO OTIMIZADA (1080p) ──
+
+yt-dlp -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best" --merge-output-format mp4 --cookies cookies.txt --embed-thumbnail --embed-metadata --embed-subs --sub-langs "pt,pt-BR,en" -o "%(uploader)s - %(title)s.%(ext)s" --batch-file lista.txt
+
+── VERSÃO SIMPLIFICADA ──
+
+yt-dlp -f "bv+ba/b" --merge-output-format mp4 --cookies cookies.txt --embed-subs --sub-langs pt,en -a lista.txt
+
+── 4K (2160p) ──
+
+yt-dlp -f "bestvideo[height<=2160]+bestaudio" --merge-output-format mp4 --cookies cookies.txt -a lista.txt
+
+── 720p (HD) ──
+
+yt-dlp -f "bestvideo[height<=720]+bestaudio" --merge-output-format mp4 --cookies cookies.txt -a lista.txt
+
+── COM LIMITE DE VELOCIDADE (5MB/s) ──
+
+yt-dlp -f "bv+ba/b" --merge-output-format mp4 --limit-rate 5M --cookies cookies.txt -a lista.txt
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. COMO OBTER O ARQUIVO cookies.txt
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+MÉTODO 1 - Extensão do Navegador (Recomendado):
+   1. Instale a extensão "Get cookies.txt LOCALLY" no seu navegador
+   2. Acesse o YouTube enquanto estiver logado
+   3. Clique na extensão e exporte os cookies
+   4. Salve o arquivo como "cookies.txt" na mesma pasta dos comandos
+
+MÉTODO 2 - Manualmente via yt-dlp:
+   yt-dlp --cookies-from-browser chrome
+   (Substitua 'chrome' por: firefox, edge, opera, brave, etc) 
+   
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. COMO CRIAR O ARQUIVO lista.txt
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Crie um arquivo de texto chamado "lista.txt" com um URL por linha:
+
+Exemplo de conteúdo:
+https://www.youtube.com/watch?v=dQw4w9WgXcQ
+https://www.youtube.com/watch?v=9bZkp7q19f0
+https://www.youtube.com/watch?v=kJQP7kiw5Fk
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. ESTRUTURA DE ARQUIVOS NECESSÁRIA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+pasta_downloads/
+├── comandos.txt (este arquivo)
+├── cookies.txt (arquivo de cookies exportado)
+└── lista.txt (arquivo com URLs para download)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. EXPLICAÇÃO DOS PARÂMETROS PRINCIPAIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ÁUDIO:
+  -f bestaudio              = Seleciona melhor qualidade de áudio
+  --extract-audio           = Extrai apenas o áudio
+  --audio-format opus       = Converte para formato OPUS
+  --audio-quality 0         = Melhor qualidade (0-9, 0=melhor)
+
+VÍDEO:
+  -f "bv+ba"               = Melhor vídeo + melhor áudio
+  --merge-output-format mp4 = Formato final MP4
+  [height<=1080]           = Limita resolução a 1080p
+
+GERAL:
+  --cookies cookies.txt     = Usa arquivo de cookies
+  --embed-thumbnail         = Incorpora miniatura
+  --embed-metadata          = Incorpora metadados
+  --embed-subs              = Incorpora legendas
+  --batch-file lista.txt    = Lê URLs do arquivo
+  -a lista.txt              = Versão curta de --batch-file
+  -o "padrão"              = Define padrão do nome do arquivo
+
+LEGENDAS:
+  --sub-langs "pt,pt-BR,en" = Baixa legendas em português e inglês
+  --convert-subs srt        = Converte legendas para SRT
+
+PERFORMANCE:
+  --limit-rate 5M           = Limita velocidade de download
+  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. DICAS IMPORTANTES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ Mantenha o yt-dlp atualizado: yt-dlp -U
+✓ Use cookies para evitar bloqueios e acessar conteúdo restrito
+✓ Para playlists inteiras, coloque o URL da playlist no lista.txt
+✓ Os arquivos serão salvos na pasta onde você executar o comando
+✓ Use aspas duplas nos comandos se houver espaços nos nomes
+✓ Verifique se tem espaço em disco suficiente antes de baixar
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. EXEMPLOS DE USO RÁPIDO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Baixar um único vídeo/áudio (sem lista):
+yt-dlp -x --audio-format opus --cookies cookies.txt URL_AQUI
+yt-dlp -f "bv+ba/b" --merge-output-format mp4 --cookies cookies.txt URL_AQUI
+
+# Baixar playlist completa:
+yt-dlp -x --audio-format opus --cookies cookies.txt "URL_DA_PLAYLIST"
+
+# Ver formatos disponíveis antes de baixar:
+yt-dlp -F --cookies cookies.txt URL_AQUI
+
+
+=======================================================
+                           FIM DO ARQUIVO
+=======================================================
