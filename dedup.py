@@ -1,281 +1,362 @@
 #!/usr/bin/env python3
+"""
+Dedup Ultra - Ferramenta Profissional de Deduplicação
+Melhorias: Baixo uso de RAM, Algoritmo de Hashing Rápido, Suporte Real a CSV, Backups.
+"""
 
 import os
 import sys
 import hashlib
 import json
+import csv
+import shutil
 import argparse
 from pathlib import Path
 from collections import defaultdict
+from typing import List, Optional, Generator, Dict, Set, Any
 
-class DuplicateRemover:
-    def __init__(self, verbose=False):
-        self.verbose = verbose
-        self.duplicates_found = 0
-        
-    def log(self, message):
-        if self.verbose:
-            print(f"[INFO] {message}")
-    
-    def hash_file(self, filepath):
-        hasher = hashlib.md5()
+# Cores para terminal
+class Colors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+
+class Utils:
+    @staticmethod
+    def create_backup(filepath: Path) -> Path:
+        """Cria um backup do arquivo antes de modificar (ex: arquivo.json.bak)"""
+        backup_path = filepath.with_suffix(filepath.suffix + '.bak')
+        shutil.copy2(filepath, backup_path)
+        return backup_path
+
+    @staticmethod
+    def get_file_hash(filepath: Path, first_chunk_only: bool = False) -> str:
+        """
+        Calcula hash SHA-256.
+        Se first_chunk_only=True, calcula apenas dos primeiros 4KB (rápido para descarte inicial).
+        """
+        hasher = hashlib.sha256()
         try:
             with open(filepath, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b""):
+                if first_chunk_only:
+                    chunk = f.read(4096)
                     hasher.update(chunk)
+                else:
+                    while chunk := f.read(65536): # Lê em blocos de 64KB
+                        hasher.update(chunk)
             return hasher.hexdigest()
-        except Exception as e:
-            self.log(f"Erro ao processar {filepath}: {e}")
-            return None
-    
-    def find_duplicate_files(self, directory, remove=False):
-        print(f"\n🔍 Procurando arquivos duplicados em: {directory}")
+        except OSError:
+            return ""
+
+class Deduplicator:
+    def __init__(self, verbose: bool = False, backup: bool = True):
+        self.verbose = verbose
+        self.backup = backup
+        self.stats = {'removed': 0, 'space_saved': 0}
+
+    def log(self, msg: str, color: str = Colors.OKBLUE):
+        if self.verbose:
+            print(f"{color}{msg}{Colors.ENDC}")
+
+    def error(self, msg: str):
+        print(f"{Colors.FAIL}[ERRO] {msg}{Colors.ENDC}", file=sys.stderr)
+
+    # -------------------------------------------------------------------------
+    # MODO ARQUIVOS (Algoritmo Otimizado: Tamanho -> Hash Parcial -> Hash Total)
+    # -------------------------------------------------------------------------
+    def process_files(self, directory: Path, delete: bool = False):
+        print(f"\n{Colors.HEADER}🔍 Analisando diretório: {directory}{Colors.ENDC}")
         
-        hashes = defaultdict(list)
+        # 1. Agrupar por tamanho (Muito rápido)
+        size_groups = defaultdict(list)
+        for p in directory.rglob('*'):
+            if p.is_file():
+                try:
+                    size_groups[p.stat().st_size].append(p)
+                except OSError:
+                    continue
+
+        # Filtrar apenas tamanhos que tenham mais de 1 arquivo
+        potential_dupes = {s: files for s, files in size_groups.items() if len(files) > 1}
         
-        for root, _, files in os.walk(directory):
-            for filename in files:
-                filepath = os.path.join(root, filename)
-                file_hash = self.hash_file(filepath)
-                
-                if file_hash:
-                    hashes[file_hash].append(filepath)
+        duplicates_found = []
         
-        duplicates = {h: files for h, files in hashes.items() if len(files) > 1}
+        # 2. Comparar Hash Parcial e depois Hash Total
+        total_groups = len(potential_dupes)
+        curr = 0
         
-        if not duplicates:
-            print("✅ Nenhum arquivo duplicado encontrado!")
-            return
-        
-        print(f"\n⚠️  Encontrados {len(duplicates)} grupos de arquivos duplicados:")
-        
-        for hash_val, files in duplicates.items():
-            print(f"\n📁 Grupo (hash: {hash_val[:8]}...):")
-            for i, f in enumerate(files):
-                status = "MANTIDO" if i == 0 else "DUPLICADO"
-                print(f"  [{status}] {f}")
+        for size, files in potential_dupes.items():
+            curr += 1
+            if self.verbose:
+                print(f"Processando grupo {curr}/{total_groups} (Tamanho: {size} bytes)...", end='\r')
             
-            if remove and len(files) > 1:
-                for duplicate in files[1:]:
+            # Agrupa por hash parcial (4KB iniciais)
+            partial_hashes = defaultdict(list)
+            for f in files:
+                h = Utils.get_file_hash(f, first_chunk_only=True)
+                partial_hashes[h].append(f)
+            
+            # Para colisões de hash parcial, calcula hash total
+            for p_files in partial_hashes.values():
+                if len(p_files) < 2: continue
+                
+                full_hashes = defaultdict(list)
+                for f in p_files:
+                    h = Utils.get_file_hash(f, first_chunk_only=False)
+                    full_hashes[h].append(f)
+                
+                # Adiciona confirmados à lista final
+                for f_files in full_hashes.values():
+                    if len(f_files) > 1:
+                        duplicates_found.append(f_files)
+
+        print(f"\n✅ Análise concluída. Grupos de duplicatas: {len(duplicates_found)}")
+
+        if not duplicates_found:
+            return
+
+        # Relatório e Remoção
+        for group in duplicates_found:
+            original = group[0]
+            dupes = group[1:]
+            
+            print(f"\n{Colors.OKCYAN}📂 Grupo Duplicado ({original.stat().st_size} bytes):{Colors.ENDC}")
+            print(f"   Original: {original.name}")
+            for d in dupes:
+                print(f"   Duplicata: {d.relative_to(directory)}")
+            
+            if delete:
+                for d in dupes:
                     try:
-                        os.remove(duplicate)
-                        print(f"  🗑️  Removido: {duplicate}")
-                        self.duplicates_found += 1
-                    except Exception as e:
-                        print(f"  ❌ Erro ao remover {duplicate}: {e}")
-    
-    def remove_duplicate_lines(self, input_file, output_file=None, keep_order=False):
-        print(f"\n🔍 Removendo linhas duplicadas de: {input_file}")
+                        size = d.stat().st_size
+                        os.remove(d)
+                        self.stats['removed'] += 1
+                        self.stats['space_saved'] += size
+                        print(f"   {Colors.FAIL}🗑️  Deletado: {d.name}{Colors.ENDC}")
+                    except OSError as e:
+                        self.error(f"Não foi possível deletar {d}: {e}")
+
+    # -------------------------------------------------------------------------
+    # MODO LINHAS (Streaming para baixo uso de memória)
+    # -------------------------------------------------------------------------
+    def process_lines(self, input_file: Path, output_file: Path):
+        print(f"\n{Colors.HEADER}🔍 Deduplicando linhas de: {input_file}{Colors.ENDC}")
+        
+        if self.backup:
+            bkp = Utils.create_backup(input_file)
+            self.log(f"Backup criado: {bkp}")
+
+        seen_hashes = set()
+        original_count = 0
+        unique_count = 0
         
         try:
-            with open(input_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+            with open(input_file, 'r', encoding='utf-8', errors='replace') as fin, \
+                 open(output_file, 'w', encoding='utf-8') as fout:
+                
+                for line in fin:
+                    original_count += 1
+                    # Hash da linha economiza RAM comparado a guardar a string inteira
+                    line_hash = hashlib.md5(line.encode('utf-8')).digest()
+                    
+                    if line_hash not in seen_hashes:
+                        seen_hashes.add(line_hash)
+                        fout.write(line)
+                        unique_count += 1
             
-            original_count = len(lines)
-            
-            if keep_order:
-                seen = set()
-                unique_lines = []
-                for line in lines:
-                    if line not in seen:
-                        seen.add(line)
-                        unique_lines.append(line)
-            else:
-                unique_lines = list(set(lines))
-            
-            duplicates_removed = original_count - len(unique_lines)
-            
-            output = output_file or input_file
-            with open(output, 'w', encoding='utf-8') as f:
-                f.writelines(unique_lines)
-            
-            print(f"✅ Linhas originais: {original_count}")
-            print(f"✅ Linhas únicas: {len(unique_lines)}")
-            print(f"🗑️  Duplicatas removidas: {duplicates_removed}")
-            print(f"💾 Salvo em: {output}")
-            
-            self.duplicates_found += duplicates_removed
+            self.stats['removed'] = original_count - unique_count
+            print(f"✅ Linhas Originais: {original_count} | Únicas: {unique_count}")
+            print(f"💾 Salvo em: {output_file}")
             
         except Exception as e:
-            print(f"❌ Erro: {e}")
-    
-    def remove_duplicate_json_items(self, input_file, output_file=None, key=None):
-        print(f"\n🔍 Removendo duplicatas JSON de: {input_file}")
+            self.error(f"Erro ao processar linhas: {e}")
+
+    # -------------------------------------------------------------------------
+    # MODO CSV (Robusto com biblioteca padrão)
+    # -------------------------------------------------------------------------
+    def process_csv(self, input_file: Path, output_file: Path, columns: Optional[List[str]]):
+        print(f"\n{Colors.HEADER}🔍 Deduplicando CSV: {input_file}{Colors.ENDC}")
         
+        if self.backup:
+            Utils.create_backup(input_file)
+
+        try:
+            with open(input_file, 'r', encoding='utf-8', newline='') as fin:
+                # Detecta delimitador automaticamente (ex: ; ou ,)
+                sniffer = csv.Sniffer()
+                try:
+                    dialect = sniffer.sniff(fin.read(2048))
+                except csv.Error:
+                    dialect = 'excel' # fallback
+                fin.seek(0)
+                
+                reader = csv.DictReader(fin, dialect=dialect)
+                fieldnames = reader.fieldnames
+                
+                if not fieldnames:
+                    self.error("Arquivo CSV vazio ou sem cabeçalho.")
+                    return
+
+                # Verifica colunas solicitadas
+                target_cols = columns if columns else fieldnames
+                for col in target_cols:
+                    if col not in fieldnames:
+                        self.error(f"Coluna '{col}' não existe no CSV.")
+                        return
+
+                seen_keys = set()
+                unique_rows = []
+                
+                for row in reader:
+                    # Cria uma tupla com os valores das colunas alvo para usar como chave única
+                    key = tuple(row[c] for c in target_cols)
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        unique_rows.append(row)
+                    else:
+                        self.stats['removed'] += 1
+
+            # Escrevendo saída
+            with open(output_file, 'w', encoding='utf-8', newline='') as fout:
+                writer = csv.DictWriter(fout, fieldnames=fieldnames, dialect=dialect)
+                writer.writeheader()
+                writer.writerows(unique_rows)
+
+            print(f"✅ Registros únicos mantidos: {len(unique_rows)}")
+            print(f"🗑️  Duplicatas removidas: {self.stats['removed']}")
+
+        except Exception as e:
+            self.error(f"Erro no CSV: {e}")
+
+    # -------------------------------------------------------------------------
+    # MODO JSON
+    # -------------------------------------------------------------------------
+    def process_json(self, input_file: Path, output_file: Path, key: Optional[str]):
+        print(f"\n{Colors.HEADER}🔍 Deduplicando JSON: {input_file}{Colors.ENDC}")
+        
+        if self.backup:
+            Utils.create_backup(input_file)
+
         try:
             with open(input_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
+
             if not isinstance(data, list):
-                print("❌ O arquivo JSON deve conter um array no nível raiz")
+                self.error("O JSON raiz deve ser uma lista (Array).")
                 return
-            
-            original_count = len(data)
-            
-            if key:
-                seen = set()
-                unique_data = []
-                for item in data:
+
+            original_len = len(data)
+            unique_data = []
+            seen = set()
+
+            for item in data:
+                # Se tiver chave específica (ex: 'id')
+                if key:
                     if isinstance(item, dict) and key in item:
                         val = item[key]
-                        if val not in seen:
-                            seen.add(val)
+                        # Hash do valor para garantir que tipos não-hashable (como dicts aninhados) funcionem
+                        val_hash = str(val) 
+                        if val_hash not in seen:
+                            seen.add(val_hash)
                             unique_data.append(item)
                     else:
+                        # Se o item não tem a chave, mantém ele (ou podia descartar, depende da lógica)
                         unique_data.append(item)
-            else:
-                unique_data = []
-                seen = set()
-                for item in data:
+                else:
+                    # Hash do objeto inteiro
                     item_str = json.dumps(item, sort_keys=True)
-                    if item_str not in seen:
-                        seen.add(item_str)
+                    item_hash = hashlib.md5(item_str.encode()).digest()
+                    if item_hash not in seen:
+                        seen.add(item_hash)
                         unique_data.append(item)
-            
-            duplicates_removed = original_count - len(unique_data)
-            
-            output = output_file or input_file
-            with open(output, 'w', encoding='utf-8') as f:
-                json.dump(unique_data, f, indent=2, ensure_ascii=False)
-            
-            print(f"✅ Itens originais: {original_count}")
-            print(f"✅ Itens únicos: {len(unique_data)}")
-            print(f"🗑️  Duplicatas removidas: {duplicates_removed}")
-            print(f"💾 Salvo em: {output}")
-            
-            self.duplicates_found += duplicates_removed
-            
-        except Exception as e:
-            print(f"❌ Erro: {e}")
-    
-    def remove_duplicate_csv_rows(self, input_file, output_file=None, columns=None):
-        print(f"\n🔍 Removendo linhas duplicadas CSV de: {input_file}")
-        
-        try:
-            with open(input_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
-            if not lines:
-                print("❌ Arquivo vazio")
-                return
-            
-            header = lines[0]
-            data_lines = lines[1:]
-            original_count = len(data_lines)
-            
-            if columns:
-                header_parts = header.strip().split(',')
-                col_indices = [header_parts.index(col) for col in columns if col in header_parts]
-                
-                seen = set()
-                unique_lines = [header]
-                
-                for line in data_lines:
-                    parts = line.strip().split(',')
-                    key = tuple(parts[i] for i in col_indices if i < len(parts))
-                    if key not in seen:
-                        seen.add(key)
-                        unique_lines.append(line)
-            else:
-                unique_lines = [header] + list(dict.fromkeys(data_lines))
-            
-            duplicates_removed = original_count - (len(unique_lines) - 1)
-            
-            output = output_file or input_file
-            with open(output, 'w', encoding='utf-8') as f:
-                f.writelines(unique_lines)
-            
-            print(f"✅ Linhas originais: {original_count}")
-            print(f"✅ Linhas únicas: {len(unique_lines) - 1}")
-            print(f"🗑️  Duplicatas removidas: {duplicates_removed}")
-            print(f"💾 Salvo em: {output}")
-            
-            self.duplicates_found += duplicates_removed
-            
-        except Exception as e:
-            print(f"❌ Erro: {e}")
 
+            self.stats['removed'] = original_len - len(unique_data)
+
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(unique_data, f, indent=2, ensure_ascii=False)
+
+            print(f"✅ Itens únicos: {len(unique_data)}")
+            print(f"🗑️  Removidos: {self.stats['removed']}")
+
+        except json.JSONDecodeError:
+            self.error("Arquivo JSON inválido ou corrompido.")
+        except Exception as e:
+            self.error(f"Erro JSON: {e}")
 
 def main():
     parser = argparse.ArgumentParser(
-        description="🔧 Detector e Removedor Universal de Duplicatas",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Exemplos de uso:
-  
-  Encontrar arquivos duplicados:
-    python dedup.py files /caminho/pasta --scan
-  
-  Remover arquivos duplicados:
-    python dedup.py files /caminho/pasta --remove
-  
-  Remover linhas duplicadas:
-    python dedup.py lines arquivo.txt
-  
-  Remover duplicatas JSON:
-    python dedup.py json dados.json --key id
-  
-  Remover linhas duplicadas CSV:
-    python dedup.py csv dados.csv --columns nome,email
-        """
+        description="🚀 Dedup Ultra - Removedor Profissional de Duplicatas",
+        epilog="Ex: python dedup.py files ./minha_pasta --delete"
     )
     
-    parser.add_argument('mode', choices=['files', 'lines', 'json', 'csv'],
-                       help='Modo de operação')
-    parser.add_argument('path', help='Arquivo ou diretório para processar')
-    parser.add_argument('-o', '--output', help='Arquivo de saída (padrão: sobrescreve o original)')
-    parser.add_argument('--remove', action='store_true', 
-                       help='Remove duplicatas (para modo files)')
-    parser.add_argument('--scan', action='store_true',
-                       help='Apenas escaneia sem remover (para modo files)')
-    parser.add_argument('--keep-order', action='store_true',
-                       help='Mantém a ordem original (para modo lines)')
-    parser.add_argument('--key', help='Chave para comparação (para modo json)')
-    parser.add_argument('--columns', help='Colunas para comparação, separadas por vírgula (para modo csv)')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Modo verboso')
-    
+    subparsers = parser.add_subparsers(dest='mode', required=True, help='Modo de operação')
+
+    # Modo Files
+    p_files = subparsers.add_parser('files', help='Encontrar arquivos duplicados')
+    p_files.add_argument('path', type=Path, help='Diretório para escanear')
+    p_files.add_argument('--delete', action='store_true', help='Deletar arquivos duplicados (mantém o mais antigo/primeiro)')
+
+    # Modo Lines
+    p_lines = subparsers.add_parser('lines', help='Remover linhas duplicadas de texto')
+    p_lines.add_argument('file', type=Path, help='Arquivo de entrada')
+    p_lines.add_argument('-o', '--output', type=Path, help='Arquivo de saída (Opcional)')
+    p_lines.add_argument('--no-backup', action='store_true', help='Não criar arquivo .bak')
+
+    # Modo CSV
+    p_csv = subparsers.add_parser('csv', help='Remover duplicatas em CSV')
+    p_csv.add_argument('file', type=Path, help='Arquivo CSV')
+    p_csv.add_argument('-o', '--output', type=Path, help='Arquivo de saída')
+    p_csv.add_argument('--cols', help='Colunas para verificar duplicidade (separadas por vírgula)')
+    p_csv.add_argument('--no-backup', action='store_true', help='Não criar arquivo .bak')
+
+    # Modo JSON
+    p_json = subparsers.add_parser('json', help='Remover duplicatas em JSON')
+    p_json.add_argument('file', type=Path, help='Arquivo JSON')
+    p_json.add_argument('-o', '--output', type=Path, help='Arquivo de saída')
+    p_json.add_argument('--key', help='Chave JSON (ex: id) para verificar unicidade')
+    p_json.add_argument('--no-backup', action='store_true', help='Não criar arquivo .bak')
+
+    # Argumentos globais
+    parser.add_argument('-v', '--verbose', action='store_true', help='Mostrar detalhes do processo')
+
     args = parser.parse_args()
     
-    remover = DuplicateRemover(verbose=args.verbose)
-    
+    # Configuração Inicial
+    do_backup = not getattr(args, 'no_backup', False)
+    dedup = Deduplicator(verbose=args.verbose, backup=do_backup)
+
     print("="*60)
-    print("🔧 DETECTOR E REMOVEDOR UNIVERSAL DE DUPLICATAS")
-    print("="*60)
-    
-    if args.mode == 'files':
-        if not os.path.isdir(args.path):
-            print(f"❌ Erro: {args.path} não é um diretório válido")
-            sys.exit(1)
-        
-        should_remove = args.remove and not args.scan
-        remover.find_duplicate_files(args.path, remove=should_remove)
-    
-    elif args.mode == 'lines':
-        if not os.path.isfile(args.path):
-            print(f"❌ Erro: {args.path} não é um arquivo válido")
-            sys.exit(1)
-        
-        remover.remove_duplicate_lines(args.path, args.output, args.keep_order)
-    
-    elif args.mode == 'json':
-        if not os.path.isfile(args.path):
-            print(f"❌ Erro: {args.path} não é um arquivo válido")
-            sys.exit(1)
-        
-        remover.remove_duplicate_json_items(args.path, args.output, args.key)
-    
-    elif args.mode == 'csv':
-        if not os.path.isfile(args.path):
-            print(f"❌ Erro: {args.path} não é um arquivo válido")
-            sys.exit(1)
-        
-        columns = args.columns.split(',') if args.columns else None
-        remover.remove_duplicate_csv_rows(args.path, args.output, columns)
-    
-    print("\n" + "="*60)
-    print(f"✅ Processo concluído! Total de duplicatas removidas: {remover.duplicates_found}")
+    print(f"{Colors.BOLD}🔧 DEDUP ULTRA 2.0{Colors.ENDC}")
     print("="*60)
 
+    # Roteamento de Comandos
+    if args.mode == 'files':
+        if not args.path.is_dir():
+            dedup.error("O caminho deve ser um diretório.")
+            sys.exit(1)
+        dedup.process_files(args.path, delete=args.delete)
+        
+        if dedup.stats['removed'] > 0:
+            mb_saved = dedup.stats['space_saved'] / (1024 * 1024)
+            print(f"\n🎉 Espaço recuperado: {mb_saved:.2f} MB")
+
+    elif args.mode == 'lines':
+        out = args.output or args.file
+        dedup.process_lines(args.file, out)
+
+    elif args.mode == 'csv':
+        out = args.output or args.file
+        cols = args.cols.split(',') if args.cols else None
+        dedup.process_csv(args.file, out, cols)
+
+    elif args.mode == 'json':
+        out = args.output or args.file
+        dedup.process_json(args.file, out, args.key)
 
 if __name__ == "__main__":
     main()

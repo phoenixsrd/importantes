@@ -1,270 +1,199 @@
 import os
 import json
 import time
+import random
 from pathlib import Path
-from urllib.parse import quote, urlencode
-import urllib.request
-import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-class MusicScanner:
-    def __init__(self, pasta_musicas):
+# Bibliotecas externas necessárias
+try:
+    from tinytag import TinyTag
+    from youtubesearchpython import VideosSearch
+    from tqdm import tqdm
+    from colorama import init, Fore, Style
+except ImportError:
+    print("❌ Erro: Bibliotecas faltando.")
+    print("Por favor, instale: pip install tinytag youtube-search-python tqdm colorama")
+    exit()
+
+# Inicializa cores
+init(autoreset=True)
+
+class MusicScannerPro:
+    def __init__(self, pasta_musicas, max_threads=4):
         self.pasta_musicas = pasta_musicas
+        self.max_threads = max_threads
         self.formatos_audio = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', 
                                '.wma', '.opus', '.mp4', '.webm', '.ape', '.alac'}
         self.musicas_encontradas = []
     
+    def obter_metadados(self, caminho_arquivo):
+        """Tenta ler Artista e Título dos metadados do arquivo"""
+        try:
+            tag = TinyTag.get(caminho_arquivo)
+            if tag.artist and tag.title:
+                return f"{tag.artist} - {tag.title}"
+            elif tag.title:
+                return tag.title
+        except:
+            pass
+        # Fallback: retorna o nome do arquivo limpo
+        return Path(caminho_arquivo).stem.replace('_', ' ').replace('-', ' ')
+
     def escanear_pasta(self):
-        """Escaneia a pasta em busca de arquivos de áudio"""
-        print(f"🔍 Escaneando a pasta: {self.pasta_musicas}")
-        print("-" * 60)
+        """Escaneia a pasta recursivamente"""
+        print(f"{Fore.CYAN}🔍 Escaneando diretório: {self.pasta_musicas}")
         
         if not os.path.exists(self.pasta_musicas):
-            print(f"❌ Erro: A pasta '{self.pasta_musicas}' não existe!")
+            print(f"{Fore.RED}❌ Erro: A pasta não existe!")
             return False
         
-        for root, dirs, files in os.walk(self.pasta_musicas):
+        arquivos_para_processar = []
+        
+        # Coleta arquivos primeiro
+        for root, _, files in os.walk(self.pasta_musicas):
             for arquivo in files:
                 extensao = Path(arquivo).suffix.lower()
                 if extensao in self.formatos_audio:
-                    caminho_completo = os.path.join(root, arquivo)
-                    nome_sem_extensao = Path(arquivo).stem
-                    
-                    self.musicas_encontradas.append({
-                        'nome': nome_sem_extensao,
-                        'arquivo_original': arquivo,
-                        'caminho': caminho_completo,
-                        'formato': extensao,
-                        'pasta': root,
-                        'link_youtube': None
-                    })
-        
-        print(f"✅ Total de músicas encontradas: {len(self.musicas_encontradas)}")
-        return True
-    
-    def buscar_video_youtube(self, nome_musica):
-        """Busca o link direto do vídeo no YouTube"""
-        try:
-            # Prepara a busca
-            query = quote(nome_musica)
-            url = f"https://www.youtube.com/results?search_query={query}"
-            
-            # Faz a requisição
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            req = urllib.request.Request(url, headers=headers)
-            
-            with urllib.request.urlopen(req, timeout=10) as response:
-                html = response.read().decode('utf-8')
-            
-            # Procura pelo primeiro videoId nos resultados
-            # Padrão: "videoId":"xxxxxxxxxxx"
-            match = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-            
-            if match:
-                video_id = match.group(1)
-                return f"https://www.youtube.com/watch?v={video_id}"
-            else:
-                return None
-                
-        except Exception as e:
-            print(f"⚠️  Erro ao buscar '{nome_musica}': {str(e)}")
-            return None
-    
-    def buscar_todos_links_youtube(self, delay=2):
-        """Busca os links do YouTube para todas as músicas"""
-        print("\n🔎 Buscando links no YouTube...")
-        print("⏳ Isso pode levar alguns minutos...\n")
-        print("-" * 60)
-        
-        total = len(self.musicas_encontradas)
-        
-        for i, musica in enumerate(self.musicas_encontradas, 1):
-            print(f"[{i}/{total}] Buscando: {musica['nome'][:50]}...")
-            
-            link = self.buscar_video_youtube(musica['nome'])
-            musica['link_youtube'] = link
-            
-            if link:
-                print(f"    ✅ Encontrado: {link}")
-            else:
-                print(f"    ❌ Não encontrado")
-            
-            # Delay entre requisições para não sobrecarregar
-            if i < total:
-                time.sleep(delay)
-        
-        print("-" * 60)
-        print("✅ Busca concluída!\n")
-    
-    def salvar_relatorio_txt(self, arquivo_saida="relatorio_musicas.txt"):
-        """Salva um relatório em formato TXT"""
-        with open(arquivo_saida, 'w', encoding='utf-8') as f:
-            f.write("=" * 70 + "\n")
-            f.write("RELATÓRIO DE MÚSICAS ENCONTRADAS\n")
-            f.write("=" * 70 + "\n\n")
-            f.write(f"Total de músicas: {len(self.musicas_encontradas)}\n\n")
-            
-            for i, musica in enumerate(self.musicas_encontradas, 1):
-                f.write(f"{i}. {musica['nome']}\n")
-                f.write(f"   Arquivo: {musica['arquivo_original']}\n")
-                f.write(f"   Formato: {musica['formato']}\n")
-                f.write(f"   Local: {musica['pasta']}\n")
-                
-                if musica['link_youtube']:
-                    f.write(f"   YouTube: {musica['link_youtube']}\n")
-                else:
-                    f.write(f"   YouTube: Não encontrado\n")
-                
-                f.write("-" * 70 + "\n\n")
-        
-        print(f"📄 Relatório TXT salvo em: {arquivo_saida}")
-    
-    def salvar_relatorio_json(self, arquivo_saida="relatorio_musicas.json"):
-        """Salva um relatório em formato JSON"""
-        dados = []
-        for musica in self.musicas_encontradas:
-            dados.append({
-                'nome': musica['nome'],
-                'arquivo_original': musica['arquivo_original'],
-                'formato': musica['formato'],
-                'caminho_completo': musica['caminho'],
-                'link_youtube': musica['link_youtube']
-            })
-        
-        with open(arquivo_saida, 'w', encoding='utf-8') as f:
-            json.dump(dados, f, ensure_ascii=False, indent=2)
-        
-        print(f"📄 Relatório JSON salvo em: {arquivo_saida}")
-    
-    def salvar_lista_simples(self, arquivo_saida="lista_musicas.txt"):
-        """Salva apenas os nomes das músicas em uma lista simples"""
-        with open(arquivo_saida, 'w', encoding='utf-8') as f:
-            for musica in self.musicas_encontradas:
-                f.write(f"{musica['nome']}\n")
-        
-        print(f"📄 Lista simples salva em: {arquivo_saida}")
-    
-    def salvar_links_youtube(self, arquivo_saida="links_youtube.txt"):
-        """Salva apenas os links do YouTube encontrados"""
-        with open(arquivo_saida, 'w', encoding='utf-8') as f:
-            f.write("LINKS DIRETOS DO YOUTUBE\n")
-            f.write("=" * 70 + "\n\n")
-            
-            encontrados = 0
-            nao_encontrados = 0
-            
-            for musica in self.musicas_encontradas:
-                f.write(f"Música: {musica['nome']}\n")
-                if musica['link_youtube']:
-                    f.write(f"Link: {musica['link_youtube']}\n\n")
-                    encontrados += 1
-                else:
-                    f.write(f"Link: NÃO ENCONTRADO\n\n")
-                    nao_encontrados += 1
-            
-            f.write("=" * 70 + "\n")
-            f.write(f"Links encontrados: {encontrados}\n")
-            f.write(f"Links não encontrados: {nao_encontrados}\n")
-        
-        print(f"📄 Links do YouTube salvos em: {arquivo_saida}")
-    
-    def salvar_links_apenas_encontrados(self, arquivo_saida="links_encontrados.txt"):
-        """Salva apenas os links que foram realmente encontrados"""
-        with open(arquivo_saida, 'w', encoding='utf-8') as f:
-            f.write("LINKS ENCONTRADOS NO YOUTUBE\n")
-            f.write("=" * 70 + "\n\n")
-            
-            count = 0
-            for musica in self.musicas_encontradas:
-                if musica['link_youtube']:
-                    f.write(f"{musica['nome']}\n")
-                    f.write(f"{musica['link_youtube']}\n\n")
-                    count += 1
-            
-            f.write("=" * 70 + "\n")
-            f.write(f"Total: {count} links encontrados\n")
-        
-        print(f"📄 Links encontrados salvos em: {arquivo_saida}")
-    
-    def mostrar_resumo(self):
-        """Mostra um resumo das músicas encontradas"""
-        if not self.musicas_encontradas:
-            print("❌ Nenhuma música encontrada!")
-            return
-        
-        print("\n" + "=" * 60)
-        print("📊 RESUMO DAS MÚSICAS ENCONTRADAS")
-        print("=" * 60)
-        
-        # Conta formatos
-        formatos = {}
-        for musica in self.musicas_encontradas:
-            formato = musica['formato']
-            formatos[formato] = formatos.get(formato, 0) + 1
-        
-        print(f"\nTotal: {len(self.musicas_encontradas)} músicas\n")
-        print("Por formato:")
-        for formato, qtd in sorted(formatos.items()):
-            print(f"  {formato}: {qtd} arquivo(s)")
-        
-        # Conta links do YouTube
-        links_encontrados = sum(1 for m in self.musicas_encontradas if m['link_youtube'])
-        if links_encontrados > 0:
-            print(f"\nLinks do YouTube encontrados: {links_encontrados}/{len(self.musicas_encontradas)}")
-        
-        print("\n" + "=" * 60)
+                    arquivos_para_processar.append(os.path.join(root, arquivo))
 
+        print(f"{Fore.GREEN}✅ Arquivos de áudio detectados: {len(arquivos_para_processar)}")
+        
+        # Processa metadados com barra de progresso
+        print(f"\n{Fore.YELLOW}📖 Lendo metadados e preparando lista...")
+        for caminho_completo in tqdm(arquivos_para_processar, unit="música"):
+            arquivo = os.path.basename(caminho_completo)
+            termo_busca = self.obter_metadados(caminho_completo)
+            
+            self.musicas_encontradas.append({
+                'nome_arquivo': arquivo,
+                'termo_busca': termo_busca, # Muito mais preciso que apenas o nome do arquivo
+                'caminho': caminho_completo,
+                'formato': Path(arquivo).suffix.lower(),
+                'link_youtube': None,
+                'duracao': None
+            })
+            
+        return True
+
+    def _buscar_single(self, musica):
+        """Função interna para buscar uma única música (usada na thread)"""
+        try:
+            # Pequeno delay aleatório para evitar bloqueio de IP (mesmo com lib externa)
+            time.sleep(random.uniform(0.1, 0.5))
+            
+            videos_search = VideosSearch(musica['termo_busca'], limit=1)
+            resultado = videos_search.result()
+            
+            if resultado['result']:
+                video = resultado['result'][0]
+                musica['link_youtube'] = video['link']
+                musica['titulo_youtube'] = video['title']
+                musica['duracao'] = video['duration']
+                return True
+            else:
+                return False
+        except Exception as e:
+            return False
+
+    def buscar_links_youtube_paralelo(self):
+        """Busca links usando múltiplas threads para velocidade"""
+        total = len(self.musicas_encontradas)
+        if total == 0:
+            return
+
+        print(f"\n{Fore.CYAN}🚀 Iniciando busca no YouTube (Threads: {self.max_threads})...")
+        print(f"{Style.DIM}Isso será muito mais rápido que o método anterior.\n")
+
+        encontrados = 0
+        
+        with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
+            # Cria um dicionário de futuros para rastrear progresso
+            future_to_music = {executor.submit(self._buscar_single, m): m for m in self.musicas_encontradas}
+            
+            # Barra de progresso para as threads
+            for future in tqdm(as_completed(future_to_music), total=total, unit="busca", colour="green"):
+                if future.result():
+                    encontrados += 1
+
+        print(f"\n{Fore.GREEN}✅ Busca concluída! Encontrados: {encontrados}/{total}")
+
+    def gerar_relatorios(self):
+        """Gera relatórios JSON e HTML (mais bonito que TXT)"""
+        print(f"\n{Fore.YELLOW}💾 Salvando relatórios...")
+        
+        # 1. JSON (Dados puros)
+        with open("relatorio_completo.json", 'w', encoding='utf-8') as f:
+            json.dump(self.musicas_encontradas, f, ensure_ascii=False, indent=2)
+
+        # 2. TXT Simples (Links)
+        with open("playlist_links.txt", 'w', encoding='utf-8') as f:
+            for m in self.musicas_encontradas:
+                if m['link_youtube']:
+                    f.write(f"{m['link_youtube']}\n")
+        
+        # 3. HTML Visual (Melhor para leitura humana)
+        html_content = f"""
+        <html>
+        <head>
+            <title>Relatório de Músicas</title>
+            <style>
+                body {{ font-family: sans-serif; background: #1a1a1a; color: #fff; padding: 20px; }}
+                .item {{ background: #2d2d2d; padding: 15px; margin-bottom: 10px; border-radius: 8px; }}
+                a {{ color: #4facfe; text-decoration: none; }}
+                .found {{ border-left: 5px solid #00ff00; }}
+                .missing {{ border-left: 5px solid #ff0000; opacity: 0.7; }}
+                h3 {{ margin: 0 0 5px 0; }}
+                p {{ margin: 5px 0; color: #aaa; font-size: 0.9em; }}
+            </style>
+        </head>
+        <body>
+            <h1>🎵 Relatório Musical ({len(self.musicas_encontradas)} arquivos)</h1>
+            {''.join([
+                f'''<div class="item {'found' if m['link_youtube'] else 'missing'}">
+                    <h3>{m['termo_busca']}</h3>
+                    <p>Arquivo: {m['nome_arquivo']}</p>
+                    {f'<p><a href="{m["link_youtube"]}" target="_blank">📺 Assistir no YouTube ({m.get("titulo_youtube", "")})</a></p>' if m['link_youtube'] else '<p>❌ Não encontrado</p>'}
+                </div>''' for m in self.musicas_encontradas
+            ])}
+        </body>
+        </html>
+        """
+        with open("relatorio_visual.html", 'w', encoding='utf-8') as f:
+            f.write(html_content)
+
+        print(f"{Fore.GREEN}📌 Arquivos gerados:")
+        print(f"  - {Fore.WHITE}relatorio_visual.html {Style.DIM}(Abra no navegador)")
+        print(f"  - {Fore.WHITE}relatorio_completo.json {Style.DIM}(Dados estruturados)")
+        print(f"  - {Fore.WHITE}playlist_links.txt {Style.DIM}(Apenas links)")
 
 def main():
-    print("🎵 ESCANEADOR DE MÚSICAS E BUSCADOR YOUTUBE 🎵")
-    print("=" * 60)
+    print(f"{Fore.MAGENTA}{Style.BRIGHT}🎵 MUSIC SCANNER PRO 2.0 🎵")
+    print("-" * 50)
     
-    # Solicita a pasta ao usuário
-    pasta = input("\n📁 Digite o caminho da pasta com suas músicas: ").strip()
+    pasta = input(f"{Fore.YELLOW}📂 Arraste a pasta de músicas aqui ou digite o caminho:\n> {Fore.WHITE}").strip()
+    # Remove aspas que o Windows às vezes adiciona ao copiar caminho
     pasta = pasta.strip('"').strip("'")
     
-    # Cria o scanner
-    scanner = MusicScanner(pasta)
-    
-    # Escaneia a pasta
-    if scanner.escanear_pasta():
-        
-        # Pergunta se quer buscar no YouTube
-        print("\n" + "=" * 60)
-        buscar = input("🔎 Deseja buscar os links no YouTube? (s/n): ").strip().lower()
-        
-        if buscar == 's':
-            scanner.buscar_todos_links_youtube(delay=2)
-        
-        scanner.mostrar_resumo()
-        
-        print("\n" + "=" * 60)
-        print("💾 SALVANDO RELATÓRIOS...")
-        print("=" * 60 + "\n")
-        
-        # Salva todos os relatórios
-        scanner.salvar_relatorio_txt()
-        scanner.salvar_relatorio_json()
-        scanner.salvar_lista_simples()
-        scanner.salvar_links_youtube()
-        
-        if buscar == 's':
-            scanner.salvar_links_apenas_encontrados()
-        
-        print("\n✅ Processo concluído com sucesso!")
-        print("\n📌 Arquivos gerados:")
-        print("  - relatorio_musicas.txt (relatório completo)")
-        print("  - relatorio_musicas.json (formato estruturado)")
-        print("  - lista_musicas.txt (apenas nomes)")
-        print("  - links_youtube.txt (todos os links)")
-        if buscar == 's':
-            print("  - links_encontrados.txt (apenas links encontrados)")
-    else:
-        print("\n❌ Não foi possível escanear a pasta.")
-    
-    input("\n\nPressione ENTER para sair...")
+    # Pergunta sobre threads (velocidade)
+    try:
+        threads = int(input(f"{Fore.YELLOW}⚡ Nível de velocidade (1-10) [Padrão: 4]: {Fore.WHITE}") or 4)
+        threads = max(1, min(10, threads)) # Limita entre 1 e 10
+    except ValueError:
+        threads = 4
 
+    scanner = MusicScannerPro(pasta, max_threads=threads)
+    
+    if scanner.escanear_pasta():
+        buscar = input(f"\n{Fore.CYAN}🔎 Buscar links no YouTube agora? (s/n): {Fore.WHITE}").lower()
+        
+        if buscar == 's':
+            scanner.buscar_links_youtube_paralelo()
+        
+        scanner.gerar_relatorios()
+        
+    print(f"\n{Fore.MAGENTA}✨ Processo finalizado.")
+    input("Pressione ENTER para sair...")
 
 if __name__ == "__main__":
     main()
