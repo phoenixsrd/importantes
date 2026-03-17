@@ -1,4 +1,4 @@
-# 🗂️ Projeto Importantes
+# 🗂️ Importantes
 
 Este repositório contém uma coleção de scripts utilitários desenvolvidos em **Python**, focados em simplificar e automatizar a gestão de ficheiros locais. O projeto inclui ferramentas para a eliminação de ficheiros duplicados e para a análise/organização de bibliotecas de música, além de um guia de referência de comandos.
 
