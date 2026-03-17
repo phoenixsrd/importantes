@@ -37,18 +37,3 @@ python musicscanner.py
 ```bash
 cat comandos.txt
 ```
-
-## 🤝 Contribuição
-
-* Contribuições são sempre bem-vindas! Se tens ideias para melhorar os scripts atuais ou se queres adicionar novos utilitários, sente-te à vontade para o fazer:
-* Faz um Fork do projeto
-* Cria uma Branch para a tua funcionalidade (git checkout -b feature/NovaFuncionalidade)
-* Faz Commit das tuas alterações (git commit -m 'Adiciona nova funcionalidade de...')
-* Faz o Push para a Branch (git push origin feature/NovaFuncionalidade)
-* Abre um Pull Request
-
-## 📄 Licença
-
-* Este projeto está sob a licença MIT.
-* Consulta o ficheiro [license](https://github.com/phoenixsrd/importantes/blob/6e6e3cf706b5cf30004f51c2bc5bdd7acb7ce139/license) para mais detalhes.
-* Qualquer pessoa pode usar, copiar, modificar e distribuir este software de forma livre e gratuita, desde que seja incluída a nota de direitos de autor.
